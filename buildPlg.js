@@ -78,6 +78,7 @@ function main(args) {
 
   function end() {
     output += '}\n';
+    fs.mkdirSync(config.buildDir, {recursive: true});
     writeUTF16(path.join(config.buildDir, pluginFilename), output);
     console.log('written plugin code to ' + pluginFilename);
   }
