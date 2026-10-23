@@ -1,16 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
-var readline = require('readline');
-var mkdirp = require('mkdirp');
-var gumyen = require('gumyen');
-
-var writeUTF16 = require('./util').writeUTF16;
+var util = require('./util');
+var writeUTF16 = util.writeUTF16;
 
 function main(args) {
-  var fs = require('fs-extra');
+  var fs = require('fs');
   var path = require('path');
-  var config = require(path.join(process.cwd(), 'plgconfig'));
+  var config = util.loadConfig();
 
   var directory;
   var filename;
@@ -45,53 +42,75 @@ function main(args) {
   var filesWritten = {};
   var level = 0;
   var globals = [];
+  var pendingFunc = null;
 
-  var functionRegex = /^\s*(\w+)\s+"(\(.*\))\s+\{/;
-  var endFunctionRegex = /^(.*)}"$/;
+  // Sibelius writes method headers as 'Name "(args) {', but also
+  // 'Name "(args){ code...', one-liners 'Name "(){ code }"', and
+  // 'Name "(args)' with the opening brace on the next line
+  var functionRegex = /^\s*(\w+)\s+"(\(\s*(?:\w+\s*(?:,\s*\w+\s*)*)?\))\s*(\{.*)?$/;
+  var endFunctionRegex = /^(.*)}"\s*$/;
   var moduleLineRegex = /^\s*\/\/\$module\(([\w./]+)\)/;
 
   var dialogRegex = /^\s*(\w+)\s+"Dialog"\s*$/;
   var startDialogSegmentRegex = /^\s*\{/;
   var endDialogSegmentRegex = /^\s*}/;
 
-  mkdirp.sync(directory);
-  mkdirp.sync(path.join(directory, 'dialog'));
+  fs.mkdirSync(path.join(directory, 'dialog'), {recursive: true});
 
-  var encoding = gumyen.encodingSync(filename);
-  console.log('Processing: %s (%s)', filename, encoding);
-
-  var rd = readline.createInterface({
-    input: fs.createReadStream(filename, {encoding: encoding}),
-    output: process.stdout,
-    terminal: false
-  });
+  console.log('Processing: %s', filename);
 
   var processFn = processLine;
 
-  var n = 0;
-  rd.on('line', function(line) {
+  util.readLines(filename).forEach(function(line) {
     processFn(line);
   });
 
-  rd.on('close', function() {
-    if (!dialogsOnly) {
-      writeGlobals();
-    }
+  if (!dialogsOnly) {
+    writeGlobals();
+  }
 
-    console.log('Finished: written to ' + directory);
-  });
+  console.log('Finished: written to ' + directory);
 
+  // globals are kept verbatim (array data and multi-line strings contain
+  // their own braces and indentation), only the plugin's outer braces and
+  // surrounding blank lines go
   function writeGlobals() {
-    writeUTF16(path.join(directory, 'GLOBALS.mss'), globals.join('\n'));
+    var lines = globals.slice();
+    trimBlank(lines);
+    if (lines.length && lines[0].trim() === '{') lines.shift();
+    if (lines.length && lines[lines.length - 1].trim() === '}') lines.pop();
+    trimBlank(lines);
+    writeUTF16(path.join(directory, 'GLOBALS.mss'), lines.join('\n'));
+  }
+
+  function trimBlank(lines) {
+    while (lines.length && lines[0].trim() === '') lines.shift();
+    while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
   }
 
   function processLine(line) {
+    line = line.replace(/^[﻿￯]/, '');
+
+    if (pendingFunc) {
+      var header = pendingFunc;
+      pendingFunc = null;
+      if (line.trim()[0] === '{') {
+        startFunction(header.name, header.args, line.trim());
+      } else {
+        // not a method after all
+        globals.push(header.line);
+        processLine(line);
+      }
+      return;
+    }
+
     var func = functionRegex.exec(line);
     if (func) {
-      console.log('function ' + func[1] + func[2]);
-      data = 'function ' + func[1] + func[2] + ' ' + '{\n';
-      var filename = path.join(directory, func[1] + '.mss');
-      processFn = processFunctionLineFunc(filename);
+      if (func[3] === undefined) {
+        pendingFunc = {name: func[1], args: func[2], line: line};
+      } else {
+        startFunction(func[1], func[2], func[3]);
+      }
       return;
     }
 
@@ -104,13 +123,19 @@ function main(args) {
       return;
     }
 
-    if (line[0] === '\uffef' || line[0] === '\ufeff') {
-      line = line.substring(1);
-    }
-    line = line.trim();
+    globals.push(line);
+  }
 
-    if (line !== '}' && line !== '{' && line !== '\ufeff' && line !== '\uffef' && line.length > 0) {
-      globals.push(line);
+  // rest is the remainder of the header line, starting with the opening brace
+  function startFunction(name, args, rest) {
+    console.log('function ' + name + args);
+    data = 'function ' + name + args + ' ' + '{\n';
+    processFn = processFunctionLineFunc(path.join(directory, name + '.mss'));
+    rest = rest.substring(1);
+    if (endFunctionRegex.exec(rest)) {
+      processFn(rest);
+    } else if (rest.trim().length) {
+      processFn(rest.replace(/^\s+/, ''));
     }
   }
 
@@ -130,9 +155,6 @@ function main(args) {
 
   function processFunctionLineFunc(filename) {
     return function (line) {
-      if (dialogsOnly) {
-        return;
-      }
       var isModuleLine = moduleLineRegex.exec(line);
       if (isModuleLine) {
         currentModulePath = path.join(directory, path.dirname(isModuleLine[1]));
@@ -145,24 +167,24 @@ function main(args) {
       var isEndFunc = endFunctionRegex.exec(line);
       if (isEndFunc) {
         var ending = isEndFunc[1];
-        if (ending.length) {
+        if (ending.trim().length) {
           ending += '\n';
+        } else {
+          ending = '';
         }
         data += ending + '} //$end\n\n';
-        if (currentModule) {
-          var opts = {encoding: encoding};
-          if (filesWritten[currentModule]) {
-            opts.flag = 'a';
-          }
-          mkdirp(currentModulePath);
-          writeUTF16(currentModule, data, opts);
+        if (dialogsOnly) {
+          // methods are skipped, only dialogs are written
+        } else if (currentModule) {
+          fs.mkdirSync(currentModulePath, {recursive: true});
+          writeUTF16(currentModule, data, {append: !!filesWritten[currentModule]});
           filesWritten[currentModule] = true;
-          currentModule = '';
         } else {
           console.log(filename);
           writeUTF16(filename, data);
           filesWritten[filename] = true;
         }
+        currentModule = '';
         processFn = processLine;
         return;
       }

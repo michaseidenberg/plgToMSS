@@ -2,16 +2,13 @@
 
 'use strict';
 
-var readline = require('readline');
-var async = require('async');
-var gumyen = require('gumyen');
-
-var writeUTF16 = require('./util').writeUTF16;
+var util = require('./util');
+var writeUTF16 = util.writeUTF16;
 
 function main(args) {
-  var fs = require('fs-extra');
+  var fs = require('fs');
   var path = require('path');
-  var config = require(path.join(process.cwd(), 'plgconfig'));
+  var config = util.loadConfig();
 
   var directory;
   var pluginFilename;
@@ -35,12 +32,6 @@ function main(args) {
     process.exit(1);
   }
 
-  var dirParts = directory.split('/');
-  var fullPathDirPfxLength = dirParts.length;
-  if (dirParts[0] === '' || dirParts[0] === '.') {
-    fullPathDirPfxLength = fullPathDirPfxLength - 1;
-  }
-
   var output = '{\n';
 
   try {
@@ -52,7 +43,7 @@ function main(args) {
 
   try {
     var dialogDirectory = path.join(directory, 'dialog');
-    var dialogsDir = fs.readdirSync(dialogDirectory);
+    var dialogsDir = fs.readdirSync(dialogDirectory).sort();
     dialogsDir
       .filter(function(name) { return name.match(/.+\.msd$/)})
       .forEach(function(name) { addFileToOutput(path.join(dialogDirectory, name))});
@@ -60,30 +51,24 @@ function main(args) {
     // NOP
   }
 
-  buildFromDir(directory, end);
-
-  function buildFromDir(directory, cb) {
-    var dir = fs.readdirSync(directory);
+  // files are processed in sorted order so that builds are reproducible
+  function buildFromDir(dirPath) {
+    var dir = fs.readdirSync(dirPath).sort();
     var fullPaths = dir.map(function(name) {
-      return path.join(directory, name)
+      return path.join(dirPath, name)
     });
 
-    var mssFiles = fullPaths.filter(function(path) { return path.match(/.+\.mss$/)});
-    async.each(mssFiles, function(path, cb) { addMethodFileToOutput(path, cb)}, doSubdirs);
+    fullPaths
+      .filter(function(path) { return path.match(/.+\.mss$/) && !path.match(/(^|\/)GLOBALS\.mss$/)})
+      .forEach(addMethodFileToOutput);
 
-    function doSubdirs(err) {
-      var subdirs = fullPaths.filter(function(path) {
-        var stat = fs.statSync(path);
-        return stat.isDirectory();
-      });
-
-      async.each(subdirs, buildFromDir, cb);
-    }
-
+    fullPaths
+      .filter(function(path) { return fs.statSync(path).isDirectory(); })
+      .forEach(buildFromDir);
   }
 
   function addFileToOutput(mssFilename) {
-    var data = gumyen.readFileWithDetectedEncodingSync(mssFilename);
+    var data = util.readText(mssFilename);
 
     if (data.length) {
       output += data;
@@ -101,32 +86,27 @@ function main(args) {
   var moduleLineRegex = /\s*\/\/\$module\(([\w/]+\.mss)\)/;
 
   function proposedFromPath(mssFilename) {
-    var parts = mssFilename.split('/');
-    return parts.slice(fullPathDirPfxLength).join('/');
+    return path.relative(directory, mssFilename).split(path.sep).join('/');
   }
 
-  function addMethodFileToOutput(mssFilename, cb) {
+  function addMethodFileToOutput(mssFilename) {
 
     var proposedModuleName = proposedFromPath(mssFilename);
 
-    var encoding = gumyen.encodingSync(mssFilename);
     var head = '';
     var moduleName = '';
     var module = '';
     var body = '';
-    var rd = readline.createInterface({
-      input: fs.createReadStream(mssFilename, {encoding: encoding}),
-      output: process.stdout,
-      terminal: false
-    });
 
-    rd.on('line', function(line) {
+    util.readLines(mssFilename).forEach(function(line) {
       var func = funcRegex.exec(line);
       if (func) {
         var mssFuncLine = '\t' + func[1] + ' "' + func[2] + ' {\n';
         console.log('function: ' + func[1]);
         head = mssFuncLine;
-        if (func[1] !== proposedModuleName) {
+        // anything between the previous //$end and this header is not code
+        body = '';
+        if (func[1] + '.mss' !== proposedModuleName) {
           module = '//$module(' + proposedModuleName + ')\n'
         }
       } else if (line.match(/^}\s*\/\/\$end/)) {
@@ -143,11 +123,10 @@ function main(args) {
         body += '\n';
       }
     });
-
-    rd.on('close', function() {
-      cb(false);
-    });
   }
+
+  buildFromDir(directory);
+  end();
 }
 
 main(process.argv.slice(2));

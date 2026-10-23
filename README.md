@@ -23,13 +23,19 @@ would like to fork and update for Windows, please be my guest!
 
 ## Install
 
-Install node! http://nodejs.org/
+Requires Node.js 18 or later (tested with Node 26). There are no npm dependencies.
 
 Clone/pull the repo, then cd to the repo directory, and
 
 ```
-$ sudo npm install -g
+$ npm link
 ```
+
+This makes `initPlg`, `importPlg`, `parsePlg`, `buildPlg` and `deployPlg` available on your PATH.
+
+The default `plgPath` in `template/plgconfig.js` is the user plugin folder of current Sibelius
+versions on macOS (`~/Library/Application Support/Avid/Sibelius/Plugins`). Sibelius loads plugins
+at startup only, so restart Sibelius after `deployPlg`.
 
 ## Script summary
 
@@ -136,7 +142,7 @@ deploy all plugins in the build directory.
 ## plgconfig.js
 ```javascript
 var config = {
-  plgPath: process.env.HOME + '/Library/Application Support/Avid/Sibelius 7.5/Plugins',
+  plgPath: process.env.HOME + '/Library/Application Support/Avid/Sibelius/Plugins',
   plgCategory: 'User',
   pluginFilename: 'Template.plg',
   linkLibraries: ['Test.plg'],

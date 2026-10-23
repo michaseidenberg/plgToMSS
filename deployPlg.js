@@ -2,11 +2,9 @@
 'use strict';
 
 function main(pluginFileNames) {
-  var fs = require('fs-extra');
+  var fs = require('fs');
   var path = require('path');
-
-  var configFile = path.join(process.cwd(), 'plgconfig');
-  var config = require(configFile);
+  var config = require('./util').loadConfig();
 
   var pluginFiles = pluginFileNames && pluginFileNames.length
     ? pluginFileNames
@@ -16,7 +14,7 @@ function main(pluginFileNames) {
           .filter(function(filename) {return filename.match(/\.plg$/);});
 
   var destDirectory = path.join(config.plgPath, config.plgCategory);
-  fs.ensureDirSync(destDirectory);
+  fs.mkdirSync(destDirectory, {recursive: true});
 
   console.log('Deploying plugins to ' + destDirectory + '...' );
   pluginFiles.forEach(function(filename) {
@@ -24,25 +22,26 @@ function main(pluginFileNames) {
 
     var fileToCopy = path.join(config.buildDir, filename);
     if (fs.existsSync(fileToCopy)) {
-      fs.copySync(fileToCopy, path.join(destDirectory, filename));
+      fs.copyFileSync(fileToCopy, path.join(destDirectory, filename));
     } else {
       console.log('(%s not found)', fileToCopy);
     }
   });
-  
+
   if (config.linkLibraries) {
     config.linkLibraries.forEach(function(filename) {
-    console.log('copying linked library %s', filename);
-    var fileToCopy = path.join(config.libDir, filename);
-    if (fs.existsSync(fileToCopy)) {
-      fs.copySync(fileToCopy, path.join(destDirectory, filename));
-    } else {
-      console.log('library %s could not be copied', fileToCopy);
-    }
-  });
-}
+      console.log('copying linked library %s', filename);
+      var fileToCopy = path.join(config.libDir, filename);
+      if (fs.existsSync(fileToCopy)) {
+        fs.copyFileSync(fileToCopy, path.join(destDirectory, filename));
+      } else {
+        console.log('library %s could not be copied', fileToCopy);
+      }
+    });
+  }
 
   console.log('done');
+  console.log('Restart Sibelius to load the deployed plugins.');
 }
 
 main(process.argv.slice(2));

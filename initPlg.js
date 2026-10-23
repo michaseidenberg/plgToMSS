@@ -2,7 +2,7 @@
 'use strict';
 
 function main() {
-  var fs = require('fs-extra');
+  var fs = require('fs');
   var path = require('path');
 
   var cwd = process.cwd();
@@ -12,17 +12,20 @@ function main() {
   var templateSrc = path.join(__dirname, 'template/src');
   var templateTest = path.join(__dirname, 'template/test');
 
-  fs.copySync(configTemplate, configFile);
+  // never overwrite an existing config or existing sources
+  if (fs.existsSync(configFile)) {
+    console.log('plgconfig.js already exists - keeping it');
+  } else {
+    fs.copyFileSync(configTemplate, configFile);
+  }
   var config = require(configFile);
 
-  fs.ensureDirSync(config.importDir);
-  fs.ensureDirSync(config.buildDir);
+  fs.mkdirSync(config.importDir, {recursive: true});
+  fs.mkdirSync(config.buildDir, {recursive: true});
+  fs.mkdirSync(config.libDir, {recursive: true});
 
-  fs.ensureDirSync(config.srcDir);
-  fs.copySync(templateSrc, config.srcDir);
-
-  fs.ensureDirSync(config.testDir);
-  fs.copySync(templateTest, config.testDir);
+  fs.cpSync(templateSrc, config.srcDir, {recursive: true, force: false});
+  fs.cpSync(templateTest, config.testDir, {recursive: true, force: false});
 
   console.log('Initialised %s for plugin development!', cwd);
   console.log('Sources in %s', config.srcDir);
